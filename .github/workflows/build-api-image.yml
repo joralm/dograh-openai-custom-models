@@ -58,8 +58,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
-          username: ${{ secrets.GHCR_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -68,7 +68,7 @@ jobs:
           file: api/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/${{ secrets.GHCR_USERNAME }}/dograh-api:${{ steps.tag.outputs.tag }}
+          tags: ghcr.io/${{ github.repository_owner }}/dograh-api:${{ steps.tag.outputs.tag }}
           # Same scope as docker-image.yml's amd64 api build, so the two share
           # layers in both directions.
           cache-from: type=gha,scope=dograh-api-amd64
@@ -76,5 +76,5 @@ jobs:
 
       - name: Summary
         run: |
-          echo "\`ghcr.io/${{ secrets.GHCR_USERNAME }}/dograh-api:${{ steps.tag.outputs.tag }}\`" \
+          echo "\`ghcr.io/${{ github.repository_owner }}/dograh-api:${{ steps.tag.outputs.tag }}\`" \
             >> "$GITHUB_STEP_SUMMARY"
