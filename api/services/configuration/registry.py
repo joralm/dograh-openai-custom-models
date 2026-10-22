@@ -1495,6 +1495,21 @@ class GoogleTTSConfiguration(BaseTTSConfiguration):
 
 
 OPENAI_TTS_MODELS = ["gpt-4o-mini-tts"]
+OPENAI_TTS_VOICES = [
+    "alloy",
+    "ash",
+    "ballad",
+    "cedar",
+    "coral",
+    "echo",
+    "fable",
+    "marin",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+]
 
 
 @register_tts(provider=OPENAI_PROVIDER)
@@ -1510,7 +1525,14 @@ class OpenAITTSService(BaseTTSConfiguration):
     )
     voice: str = Field(
         default="alloy",
-        description="OpenAI TTS voice name.",
+        description=(
+            "OpenAI TTS voice name. For a custom OpenAI-compatible base URL, "
+            "enter the voice your server supports (e.g. pt-PT)."
+        ),
+        json_schema_extra={
+            "examples": OPENAI_TTS_VOICES,
+            "allow_custom_input": True,
+        },
     )
     base_url: str = Field(
         default="https://api.openai.com/v1",

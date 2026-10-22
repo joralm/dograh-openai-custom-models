@@ -8,6 +8,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 import aiohttp
 from fastapi import HTTPException
 from loguru import logger
+from openai import BadRequestError
 
 from api.constants import MPS_API_URL
 from api.errors.failure import (
@@ -114,7 +115,9 @@ from pipecat.services.openai.stt import (
     OpenAISTTService,
     OpenAISTTSettings,
 )
-from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
+from pipecat.frames.frames import ErrorFrame, TTSAudioRawFrame
+from pipecat.services.openai.tts import OpenAITTSService as BaseOpenAITTSService
+from pipecat.services.openai.tts import OpenAITTSSettings
 from pipecat.services.openrouter.llm import (
     OpenRouterLLMService as BaseOpenRouterLLMService,
 )
@@ -304,6 +307,69 @@ def stt_uses_external_turns(user_config) -> bool:
     if user_config.stt.provider == ServiceProviders.CARTESIA.value:
         return user_config.stt.model == "ink-2"
     return False
+
+
+OPENAI_OFFICIAL_HOSTS = {"api.openai.com"}
+
+
+def _is_custom_openai_tts_endpoint(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    return (urlparse(base_url).hostname or "").lower() not in OPENAI_OFFICIAL_HOSTS
+
+
+class OpenAITTSService(BaseOpenAITTSService):
+    """OpenAI TTS that sends any configured voice verbatim to custom endpoints.
+
+    Pipecat only accepts the official OpenAI voices. OpenAI-compatible servers
+    define their own voices (e.g. ``pt-PT``), so those are not validated locally.
+    Official OpenAI endpoints keep the upstream validation.
+    """
+
+    def __init__(self, *args, allow_custom_voice: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._allow_custom_voice = allow_custom_voice
+
+    async def run_tts(self, text: str, context_id: str):
+        voice = self._settings.voice
+        if not self._allow_custom_voice or not isinstance(voice, str) or not voice:
+            async for frame in super().run_tts(text, context_id):
+                yield frame
+            return
+        try:
+            create_params = {
+                "input": text,
+                "model": self._settings.model,
+                "voice": voice,
+                "response_format": "pcm",
+            }
+            if self._settings.instructions:
+                create_params["instructions"] = self._settings.instructions
+            if self._settings.speed:
+                create_params["speed"] = self._settings.speed
+
+            async with self._client.audio.speech.with_streaming_response.create(
+                **create_params
+            ) as r:
+                if r.status_code != 200:
+                    error = await r.text()
+                    logger.error(
+                        f"{self} error getting audio (status: {r.status_code}, error: {error})"
+                    )
+                    yield ErrorFrame(
+                        error=f"Error getting audio (status: {r.status_code}, error: {error})"
+                    )
+                    return
+
+                await self.start_tts_usage_metrics(text)
+                async for chunk in r.iter_bytes(self.chunk_size):
+                    if len(chunk) > 0:
+                        await self.stop_ttfb_metrics()
+                        yield TTSAudioRawFrame(
+                            chunk, self.sample_rate, 1, context_id=context_id
+                        )
+        except BadRequestError as e:
+            yield ErrorFrame(error=f"Unknown error occurred: {e}")
 
 
 class AzureLLMService(OpenAISpokenToolCallMixin, BaseAzureLLMService):
@@ -930,9 +996,16 @@ def create_tts_service(
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
         openai_tts_settings = {"model": user_config.tts.model}
-        openai_voice = getattr(user_config.tts, "voice", None)
+        openai_voice = (getattr(user_config.tts, "voice", None) or "").strip()
+        custom_endpoint = _is_custom_openai_tts_endpoint(base_url)
+        if custom_endpoint and not openai_voice:
+            raise ValueError(
+                "OpenAI TTS voice is required when using a custom base_url; "
+                "set the voice your OpenAI-compatible server supports."
+            )
         if openai_voice:
             openai_tts_settings["voice"] = openai_voice
+        kwargs["allow_custom_voice"] = custom_endpoint
         return OpenAITTSService(
             api_key=user_config.tts.api_key,
             sample_rate=OPENAI_SAMPLE_RATE,
