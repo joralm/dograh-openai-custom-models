@@ -929,10 +929,14 @@ def create_tts_service(
         if base_url:
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
+        openai_tts_settings = {"model": user_config.tts.model}
+        openai_voice = getattr(user_config.tts, "voice", None)
+        if openai_voice:
+            openai_tts_settings["voice"] = openai_voice
         return OpenAITTSService(
             api_key=user_config.tts.api_key,
             sample_rate=OPENAI_SAMPLE_RATE,
-            settings=OpenAITTSSettings(model=user_config.tts.model),
+            settings=OpenAITTSSettings(**openai_tts_settings),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
